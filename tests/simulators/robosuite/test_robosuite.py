@@ -145,3 +145,22 @@ def test_stock_task_places_its_objects_where_scenic_says():
     assert type(simulation.env).__name__ == "Stack"
     assert tuple(simulation.result.records["a"]) == pytest.approx((0.1, 0, 0.83))
     assert tuple(simulation.result.records["b"]) == pytest.approx((-0.1, 0, 0.83))
+
+
+@pytest.mark.parametrize("shaping, positive", [(True, True), (False, False)])
+def test_stock_task_reward_is_dense_only_with_shaping(shaping, positive):
+    simulation = simulate(
+        f"""
+        param env_name = "Lift"
+        param reward_shaping = {shaping}
+        model scenic.simulators.robosuite.model
+        new Table
+        new Robot at (-0.56, 0, 0), facing -90 deg
+        new Cube with robosuiteName "cube", at (0, 0, 0.83)
+        record final simulation().reward as reward
+        """,
+        maxSteps=2,
+    )
+    # Lift's dense reward includes a reaching term that is positive at any
+    # finite gripper-cube distance; its sparse reward is 0 until the lift.
+    assert (simulation.result.records["reward"] > 0) == positive

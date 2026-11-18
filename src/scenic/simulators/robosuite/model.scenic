@@ -7,6 +7,12 @@ robosuite's Lift task; see examples/robosuite/lift.scenic.
 Set ``param env_name`` (e.g. ``"Stack"``) to run a robosuite task unchanged
 instead: give each `Cube` the ``robosuiteName`` of the task object it stands
 for (e.g. ``"cubeA"``), and put the Robot and Table where the task does.
+
+Rewards: ``record simulation().reward as reward`` records the robosuite task's
+reward each step (dense if ``param reward_shaping`` is true; 0 when the env is
+built from the scene). To define a task's reward in Scenic, record an
+expression over the objects instead, e.g.
+``record (1 if cube.position.z > 0.84 else 0) as reward``.
 """
 
 from scenic.simulators.robosuite.behaviors import *
@@ -28,9 +34,11 @@ except ModuleNotFoundError:
 
 param render = True
 param env_name = None
+param reward_shaping = False
 simulator RobosuiteSimulator(
     render=globalParameters.render,
     env_name=globalParameters.env_name,
+    reward_shaping=globalParameters.reward_shaping,
 )
 
 class RobosuiteObject:

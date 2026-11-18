@@ -11,7 +11,10 @@ ego = new Robot at (-0.16 - table.width / 2, 0, 0), facing -90 deg
 # 3 cm of the table center, 1 cm above the table top, any yaw.
 cubeHeight = Range(0.040, 0.044)
 tableTop = table.position.z + table.height / 2
-new Cube with width Range(0.040, 0.044), with length Range(0.040, 0.044),
+cube = new Cube with width Range(0.040, 0.044), with length Range(0.040, 0.044),
     with height cubeHeight,
     at (Range(-0.03, 0.03), Range(-0.03, 0.03), tableTop + 0.01 + cubeHeight / 2),
     facing Range(0, 360) deg
+
+# Lift's sparse reward: 1 once the cube is 4 cm above the table top.
+record (1 if cube.position.z > tableTop + 0.04 else 0) as reward

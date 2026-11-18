@@ -10,7 +10,12 @@ The simulator gets its robosuite env one of two ways:
   ``robosuiteName`` (e.g. ``"cubeA"``), and Scenic sets their poses.
 
 Everything after that (reset, placing objects, stepping, reading state) is
-the same for both.
+the same for both. Every robot arm uses robosuite's OSC_POSE controller.
+
+``simulation().reward`` is the robosuite task's reward for the last step
+(dense if ``param reward_shaping`` is true; always 0 for `ScenicRobosuiteEnv`,
+which has no task of its own). A scenario defines its own reward as a Scenic
+expression instead, e.g. ``record (cube.position.z > 0.84) as reward``.
 
 The interface assumes a valid scene rather than checking it: at least one
 Robot, exactly one unrotated Table (every robosuite task but TwoArmTransport
@@ -24,6 +29,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import robosuite
+from robosuite.controllers import (
+    load_composite_controller_config,
+    load_part_controller_config,
+)
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.arenas import TableArena
 from robosuite.models.objects import BoxObject
@@ -53,6 +62,18 @@ def _robotsIn(scene: Scene) -> list[Object]:
 def _isLoose(obj: Object) -> bool:
     """Loose objects are the ones Scenic places and tracks (everything but robots and the table)."""
     return not (obj.isRobot or obj.isTable)
+
+
+def _oscPoseControllerConfig(robotName: str) -> dict:
+    """The robot's default controller, with every arm set to OSC_POSE."""
+    config = load_composite_controller_config(robot=robotName)
+    for arm in ("right", "left"):
+        if arm in config["body_parts"]:
+            gripper = config["body_parts"][arm]["gripper"]
+            config["body_parts"][arm] = load_part_controller_config(
+                default_controller="OSC_POSE"
+            ) | {"gripper": gripper}
+    return config
 
 
 class ScenicRobosuiteEnv(ManipulationEnv):
@@ -101,8 +122,7 @@ class ScenicRobosuiteEnv(ManipulationEnv):
         )
 
     def reward(self, action=None) -> float:
-        # Scenic monitors the scenario itself; robosuite's reward is unused.
-        return 0.0
+        return 0.0  # no task of its own; scenarios record their own reward
 
 
 class RobosuiteSimulator(Simulator):
@@ -116,12 +136,20 @@ class RobosuiteSimulator(Simulator):
         render (bool): Whether to open an on-screen viewer.
         env_name (str | None): A robosuite task to run unchanged, e.g.
             ``"Stack"``; ``None`` builds the env from the Scenic scene.
+        reward_shaping (bool): Whether a robosuite task gives its dense
+            (shaped) reward instead of its sparse success reward.
     """
 
-    def __init__(self, render: bool = True, env_name: str | None = None) -> None:
+    def __init__(
+        self,
+        render: bool = True,
+        env_name: str | None = None,
+        reward_shaping: bool = False,
+    ) -> None:
         super().__init__()
         self.render = render
         self.env_name = env_name
+        self.reward_shaping = reward_shaping
         self.env = None
 
     def createSimulation(
@@ -136,14 +164,9 @@ class RobosuiteSimulator(Simulator):
             envArgs = dict(
                 robots=[obj.robosuiteName for obj in robots],
                 gripper_types=[obj.gripper for obj in robots],
-                # Controller: robosuite's per-robot default, an end-effector
-                # (OSC_POSE, delta) controller, as used by robomimic and
-                # MimicGen. Joint-position control is the norm for
-                # leader-follower setups (ALOHA/ACT, LeRobot); to switch, pass
-                # controller_configs with a JOINT_POSITION arm part and
-                # input_type="absolute" (its default is per-step deltas
-                # clipped to ±0.05 rad), and replace MoveEndEffectorAction.
-                controller_configs=None,
+                controller_configs=[
+                    _oscPoseControllerConfig(obj.robosuiteName) for obj in robots
+                ],
                 has_renderer=self.render,
                 has_offscreen_renderer=False,
                 use_camera_obs=False,
@@ -155,7 +178,9 @@ class RobosuiteSimulator(Simulator):
             if self.env_name is None:
                 self.env = ScenicRobosuiteEnv(scene, **envArgs)
             else:
-                self.env = robosuite.make(self.env_name, **envArgs)
+                self.env = robosuite.make(
+                    self.env_name, reward_shaping=self.reward_shaping, **envArgs
+                )
 
         return RobosuiteSimulation(scene, self.env, timestep=timestep, **kwargs)
 
@@ -187,6 +212,7 @@ class RobosuiteSimulation(Simulation):
         # step toward the commanded side.
         self.armCommands: dict[RobosuiteRobot, dict[str, np.ndarray]] = {}
         self.gripperCommands: dict[RobosuiteRobot, dict[str, np.ndarray]] = {}
+        self.reward = 0.0  # the robosuite task's reward for the last step
         super().__init__(scene, timestep=timestep, **kwargs)
 
     def setup(self) -> None:
@@ -234,7 +260,8 @@ class RobosuiteSimulation(Simulation):
             ]
         )
         self.armCommands = {}
-        self.env.step(action)  # also refreshes the viewer when render=True
+        # env.step also refreshes the viewer when render=True.
+        _, self.reward, _, _ = self.env.step(action)
 
     def getProperties(self, obj: Object, properties: set[str]) -> dict[str, object]:
         if not _isLoose(obj):

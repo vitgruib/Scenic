@@ -26,9 +26,6 @@ class MoveEndEffectorAction(RobotAction):
             1 is the controller's maximum, 0.05 m per step by default.
         rotation: axis-angle (ax, ay, az) in the robot base frame, each in
             [-1, 1]; 1 is 0.5 rad per step by default.
-
-    Joint-position control was the alternative (absolute joint targets, as in
-    ALOHA/ACT and LeRobot); see the controller comment in simulator.py.
     """
 
     def __init__(
