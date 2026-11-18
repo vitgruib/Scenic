@@ -60,6 +60,10 @@ metadrive = [
 	"metadrive-simulator >= 0.4.3",
 	"sumolib >= 1.21.0",
 ]
+robosuite = [
+	"robosuite >= 1.5.2",
+	"mujoco == 3.3.0",  # newer mujoco breaks robosuite 1.5.2's joint-type check
+]
 openscenario = [
 	"scenariogeneration"
 ]
