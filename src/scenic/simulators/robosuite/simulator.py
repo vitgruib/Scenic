@@ -1,8 +1,16 @@
 """Dynamic simulator interface for robosuite."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import robosuite
 
-from scenic.core.simulators import Simulation, Simulator
+from scenic.core.simulators import Action, Simulation, Simulator
+
+if TYPE_CHECKING:
+    from scenic.core.object_types import Object
+    from scenic.core.scenarios import Scene
 
 
 class RobosuiteSimulator(Simulator):
@@ -12,7 +20,7 @@ class RobosuiteSimulator(Simulator):
         render (bool): Whether to open an on-screen viewer.
     """
 
-    def __init__(self, render=True):
+    def __init__(self, render: bool = True) -> None:
         super().__init__()
         self.render = render
         # Reference: IsaacSimSimulator.__init__ (isaac/simulator.py), a robot
@@ -26,7 +34,7 @@ class RobosuiteSimulator(Simulator):
         #     self.environmentUSDPath = environmentUSDPath
         #     self.headless = headless
 
-    def createSimulation(self, scene, **kwargs):
+    def createSimulation(self, scene: Scene, **kwargs) -> RobosuiteSimulation:
         return RobosuiteSimulation(scene, render=self.render, **kwargs)
         # Reference: IsaacSimSimulator.createSimulation (isaac/simulator.py):
         #
@@ -40,7 +48,7 @@ class RobosuiteSimulator(Simulator):
         #         **kwargs,
         #     )
 
-    def destroy(self):
+    def destroy(self) -> None:
         super().destroy()
         # Reference: IsaacSimSimulator.destroy (isaac/simulator.py). robosuite
         # has no long-lived app; its env is closed per simulation instead.
@@ -53,7 +61,9 @@ class RobosuiteSimulator(Simulator):
 class RobosuiteSimulation(Simulation):
     """Subclass of `Simulation` for robosuite."""
 
-    def __init__(self, scene, *, render, timestep, **kwargs):
+    def __init__(
+        self, scene: Scene, *, render: bool, timestep: float | None, **kwargs
+    ) -> None:
         self.render = render
         self.env = None
         if timestep is None:
@@ -78,7 +88,7 @@ class RobosuiteSimulation(Simulation):
         #
         #     super().__init__(scene, timestep=timestep, **kwargs)
 
-    def setup(self):
+    def setup(self) -> None:
         raise NotImplementedError
         # Reference: MetaDriveSimulation.setup (metadrive/simulator.py), which
         # builds the env config from the scene before super().setup() creates
@@ -109,7 +119,7 @@ class RobosuiteSimulation(Simulation):
         #     self.using_sensors = bool(self.drive_env_config)
         #     super().setup()
 
-    def createObjectInSimulator(self, obj):
+    def createObjectInSimulator(self, obj: Object) -> None:
         raise NotImplementedError
         # Reference: MetaDriveSimulation.createObjectInSimulator
         # (metadrive/simulator.py): the first object creates and resets the
@@ -186,7 +196,7 @@ class RobosuiteSimulation(Simulation):
         #         f"Unsupported object type: {type(obj)} for object {obj}."
         #     )
 
-    def executeActions(self, allActions):
+    def executeActions(self, allActions: dict[Object, tuple[Action, ...]]) -> None:
         super().executeActions(allActions)
         # Reference: MetaDriveSimulation.executeActions (metadrive/simulator.py):
         # actions set per-agent control state, gathered here before env.step().
@@ -211,7 +221,7 @@ class RobosuiteSimulation(Simulation):
         #             ]
         #             obj.metaDriveActor.set_velocity(direction, obj._walking_speed)
 
-    def step(self):
+    def step(self) -> None:
         raise NotImplementedError
         # Reference: MetaDriveSimulation.step (metadrive/simulator.py): one
         # gym-style env.step(action) per Scenic step, then optional rendering.
@@ -238,7 +248,7 @@ class RobosuiteSimulation(Simulation):
         #         if elapsed_time < self.timestep:
         #             time.sleep(self.timestep - elapsed_time)
 
-    def getProperties(self, obj, properties):
+    def getProperties(self, obj: Object, properties: set[str]) -> dict[str, object]:
         raise NotImplementedError
         # Reference: IsaacSimSimulation.getProperties (isaac/simulator.py):
         # full 3D pose for manipulation objects, static objects read from Scenic.
@@ -259,7 +269,7 @@ class RobosuiteSimulation(Simulation):
         #         roll=raw["roll"],
         #     )
 
-    def destroy(self):
+    def destroy(self) -> None:
         super().destroy()
         # Reference: MetaDriveSimulation.destroy (metadrive/simulator.py),
         # minus its screen-recording branch: close the env this simulation made.
