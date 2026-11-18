@@ -1,8 +1,6 @@
 """Conversions between Scenic and robosuite coordinates.
 
-Scenic's origin is robosuite's world origin: on the floor, +z up, metres.
-Table heights differ between robosuite envs (and some have no table), so the
-floor is the only origin that means the same thing in every env.
+Scenic's origin is robosuite's world origin: on the floor. Must note that the table height is different in every simulator, so need to calculate individually.
 """
 
 import numpy as np

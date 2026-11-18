@@ -23,16 +23,6 @@ class RobosuiteSimulator(Simulator):
     def __init__(self, render: bool = True) -> None:
         super().__init__()
         self.render = render
-        # Reference: IsaacSimSimulator.__init__ (isaac/simulator.py), a robot
-        # simulator taking a headless flag (the inverse of render):
-        #
-        # def __init__(self, headless=False, environmentUSDPath=None, backend=None):
-        #     super().__init__()
-        #
-        #     self.backend = getBackend(backend)
-        #     self.client = self.backend.getSimulationApp(headless=headless)
-        #     self.environmentUSDPath = environmentUSDPath
-        #     self.headless = headless
 
     def createSimulation(self, scene: Scene, **kwargs) -> RobosuiteSimulation:
         return RobosuiteSimulation(scene, render=self.render, **kwargs)
