@@ -6,26 +6,9 @@ except ModuleNotFoundError:
     pass    # ignore; error will be caught later if user attempts to run a simulation
 
 behavior OpenGripper():
+    """Start opening the gripper; it keeps opening on later steps."""
     take SetGripperAction(False)
-    # Reference: OpenGripper (isaac/behaviors.scenic) repeats the action until
-    # the fingers reach their target:
-    #
-    # behavior OpenGripper(threshold=0.002, maxSteps=100):
-    #     sim = simulation()
-    #     target = np.array(self.getGripperTargetPositions(True), dtype=float)
-    #     try:
-    #         do _RepeatAction(OpenGripperAction()) for maxSteps steps
-    #     interrupt when _gripperReached(self, sim, target, threshold):
-    #         abort
 
 behavior CloseGripper():
+    """Start closing the gripper; it keeps closing on later steps."""
     take SetGripperAction(True)
-    # Reference: CloseGripper (isaac/behaviors.scenic):
-    #
-    # behavior CloseGripper(threshold=0.002, maxSteps=100):
-    #     sim = simulation()
-    #     target = np.array(self.getGripperTargetPositions(False), dtype=float)
-    #     try:
-    #         do _RepeatAction(CloseGripperAction()) for maxSteps steps
-    #     interrupt when _gripperReached(self, sim, target, threshold):
-    #         abort

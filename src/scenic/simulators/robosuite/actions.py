@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from scenic.core.simulators import Action
 
 if TYPE_CHECKING:
@@ -11,40 +13,46 @@ if TYPE_CHECKING:
     from scenic.simulators.robosuite.simulator import RobosuiteSimulation
 
 
-class SetJointPositionsAction(Action):
-    """Command a robot's joint positions."""
+class RobotAction(Action):
+    def canBeTakenBy(self, agent: Object) -> bool:
+        return agent.isRobot
 
-    def __init__(self, positions: list[float]) -> None:
-        self.positions = tuple(positions)
+
+class MoveEndEffectorAction(RobotAction):
+    """Move a robot's end effector for one step (robosuite OSC_POSE, delta input).
+
+    Args:
+        translation: (dx, dy, dz) in the robot base frame, each in [-1, 1];
+            1 is the controller's maximum, 0.05 m per step by default.
+        rotation: axis-angle (ax, ay, az) in the robot base frame, each in
+            [-1, 1]; 1 is 0.5 rad per step by default.
+
+    Joint-position control was the alternative (absolute joint targets, as in
+    ALOHA/ACT and LeRobot); see the controller comment in simulator.py.
+    """
+
+    def __init__(
+        self,
+        translation: tuple[float, float, float],
+        rotation: tuple[float, float, float] = (0, 0, 0),
+    ) -> None:
+        self.delta = np.array([*translation, *rotation], dtype=float)
 
     def applyTo(self, agent: Object, simulation: RobosuiteSimulation) -> None:
-        raise NotImplementedError
-        # Reference: SetArmJointPoseAction (isaac/actions.py), a subclass of
-        # ManipulatorRobotAction, whose canBeTakenBy restricts it to arms:
-        #
-        # class SetArmJointPoseAction(ManipulatorRobotAction):
-        #     def __init__(self, jointPositions):
-        #         self.jointPositions = jointPositions
-        #
-        #     def applyTo(self, obj, sim):
-        #         obj.setJointPositions(sim, self.jointPositions)
+        i = simulation.robotIndex[agent]
+        arm = simulation.env.robots[i].arms[0]
+        simulation.armCommands[i][arm] = self.delta
 
 
-class SetGripperAction(Action):
-    """Open or close a robot's gripper."""
+class SetGripperAction(RobotAction):
+    """Open or close a robot's gripper; it keeps moving until told otherwise."""
 
     def __init__(self, closed: bool) -> None:
         self.closed = closed
 
     def applyTo(self, agent: Object, simulation: RobosuiteSimulation) -> None:
-        raise NotImplementedError
-        # Reference: OpenGripperAction / CloseGripperAction (isaac/actions.py);
-        # note Isaac's setGripper takes `open`, the inverse of `closed` here:
-        #
-        # class OpenGripperAction(ManipulatorRobotAction):
-        #     def applyTo(self, obj, sim):
-        #         obj.setGripper(sim, True)
-        #
-        # class CloseGripperAction(ManipulatorRobotAction):
-        #     def applyTo(self, obj, sim):
-        #         obj.setGripper(sim, False)
+        i = simulation.robotIndex[agent]
+        robot = simulation.env.robots[i]
+        arm = robot.arms[0]
+        command = np.full(robot.gripper[arm].dof, 1.0 if self.closed else -1.0)
+        simulation.gripperCommands[i][f"{arm}_gripper"] = command

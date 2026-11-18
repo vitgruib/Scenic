@@ -1,259 +1,237 @@
-"""Dynamic simulator interface for robosuite."""
+"""Dynamic simulator interface for robosuite.
+
+Instead of using one of robosuite's template envs (Lift, Stack, ...), the
+interface builds a robosuite env from the Scenic scene: the scene's Table
+becomes the arena, its Robots become the env's robots, and every other object
+becomes a free box. Robosuite compiles a fixed MuJoCo model, so the env
+rebuilds that model from the current scene on each ``env.reset()``
+(robosuite's ``hard_reset``).
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import robosuite
+import numpy as np
+from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
+from robosuite.models.arenas import EmptyArena, TableArena
+from robosuite.models.objects import BoxObject
+from robosuite.models.tasks import ManipulationTask
 
-from scenic.core.simulators import Action, Simulation, Simulator
+from scenic.core.simulators import Action, Simulation, SimulationCreationError, Simulator
+from scenic.simulators.robosuite.utils import (
+    robosuiteToScenicOrientation,
+    robosuiteToScenicPosition,
+    scenicToRobosuitePosition,
+    scenicToRobosuiteQuaternion,
+    scenicToRobosuiteRobotYaw,
+)
 
 if TYPE_CHECKING:
     from scenic.core.object_types import Object
     from scenic.core.scenarios import Scene
 
 
-class RobosuiteSimulator(Simulator):
-    """A connection to robosuite.
+def _robotsIn(scene: Scene) -> list[Object]:
+    return [obj for obj in scene.objects if obj.isRobot]
 
-    Args:
-        render (bool): Whether to open an on-screen viewer.
-        env_name (str): Name of the robosuite environment, e.g. ``"Lift"``.
+
+class ScenicEnv(ManipulationEnv):
+    """A robosuite env whose model is built from a Scenic scene.
+
+    Robots are fixed when the env is created; the table, robot base poses and
+    boxes are rebuilt from ``self.scene`` on every reset.
     """
 
-    def __init__(
-        self,
-        render: bool = True,
-        env_name: str = "Lift",
-    ) -> None:
-        super().__init__()
-        self.render = render
-        self.env_name = env_name
-
-    def createSimulation(self, scene: Scene, **kwargs) -> RobosuiteSimulation:
-        return RobosuiteSimulation(
-            scene,
-            render=self.render,
-            env_name=self.env_name,
+    def __init__(self, scene: Scene, **kwargs) -> None:
+        self.scene = scene
+        robots = _robotsIn(scene)
+        if not robots:
+            raise SimulationCreationError(
+                "robosuite needs at least one Robot in the scene"
+            )
+        super().__init__(
+            robots=[obj.robosuiteName for obj in robots],
+            gripper_types=[obj.gripper for obj in robots],
             **kwargs,
         )
 
+    def _load_model(self) -> None:
+        super()._load_model()
+
+        for robot, obj in zip(self.robots, _robotsIn(self.scene)):
+            robot.robot_model.set_base_xpos(scenicToRobosuitePosition(obj.position))
+            robot.robot_model.set_base_ori([0, 0, scenicToRobosuiteRobotYaw(obj.yaw)])
+
+        tables = [obj for obj in self.scene.objects if obj.isTable]
+        if len(tables) > 1:
+            raise SimulationCreationError("robosuite supports at most one Table")
+        if tables:
+            table = tables[0]
+            if table.yaw != 0 or table.pitch != 0 or table.roll != 0:
+                raise SimulationCreationError("robosuite tables cannot be rotated")
+            top = table.position + (0, 0, table.height / 2)
+            arena = TableArena(
+                table_full_size=(table.width, table.length, table.height),
+                table_friction=table.friction,
+                table_offset=scenicToRobosuitePosition(top),
+            )
+        else:
+            arena = EmptyArena()
+        arena.set_origin([0, 0, 0])
+
+        self.boxes = {}
+        for i, obj in enumerate(self.scene.objects):
+            if obj.isRobot or obj.isTable:
+                continue
+            self.boxes[obj] = BoxObject(
+                name=f"box{i}",
+                size=[obj.width / 2, obj.length / 2, obj.height / 2],
+                rgba=obj.rgba,
+            )
+
+        self.model = ManipulationTask(
+            mujoco_arena=arena,
+            mujoco_robots=[robot.robot_model for robot in self.robots],
+            mujoco_objects=list(self.boxes.values()),
+        )
+
+    def reward(self, action=None) -> float:
+        # Scenic monitors the scenario itself; robosuite's reward is unused.
+        return 0.0
+
+
+class RobosuiteSimulator(Simulator):
+    """A connection to robosuite.
+
+    One robosuite env is kept for the whole session and reset for each
+    simulation. It is rebuilt only when a scene needs different robots or a
+    different timestep, since robosuite fixes both when the env is created.
+
+    Args:
+        render (bool): Whether to open an on-screen viewer.
+    """
+
+    def __init__(self, render: bool = True) -> None:
+        super().__init__()
+        self.render = render
+        self.env = None
+        self.envKey = None
+
+    def createSimulation(
+        self, scene: Scene, *, timestep: float | None, **kwargs
+    ) -> RobosuiteSimulation:
+        timestep = timestep if timestep else 0.05
+        robots = _robotsIn(scene)
+        key = (
+            tuple((obj.robosuiteName, obj.gripper) for obj in robots),
+            timestep,
+        )
+        if self.env is None or key != self.envKey:
+            if self.env is not None:
+                self.env.close()
+            self.env = ScenicEnv(
+                scene,
+                # Controller: robosuite's per-robot default, an end-effector
+                # (OSC_POSE, delta) controller, as used by robomimic and
+                # MimicGen. Joint-position control is the norm for
+                # leader-follower setups (ALOHA/ACT, LeRobot); to switch, pass
+                # controller_configs with a JOINT_POSITION arm part and
+                # input_type="absolute" (its default is per-step deltas
+                # clipped to ±0.05 rad), and replace MoveEndEffectorAction.
+                controller_configs=None,
+                has_renderer=self.render,
+                has_offscreen_renderer=False,
+                use_camera_obs=False,
+                control_freq=1 / timestep,
+                horizon=10**9,  # Scenic decides when an episode ends
+                ignore_done=True,
+                hard_reset=True,
+            )
+            self.envKey = key
+        return RobosuiteSimulation(scene, self.env, timestep=timestep, **kwargs)
+
     def destroy(self) -> None:
+        if self.env is not None:
+            self.env.close()
+            self.env = None
         super().destroy()
-        # TODO test to make sure everyting is destoreyd properly
 
 
 class RobosuiteSimulation(Simulation):
     """Subclass of `Simulation` for robosuite."""
 
     def __init__(
-        self,
-        scene: Scene,
-        *,
-        render: bool,
-        env_name: str,
-        timestep: float | None,
-        **kwargs,
+        self, scene: Scene, env: ScenicEnv, *, timestep: float, **kwargs
     ) -> None:
-        self.render = render
-        self.env_name = env_name
-        self.env = None
-        timestep = (
-            timestep if timestep else 0.05
-        )  # lookout for contradicitnos that might be somehow passed through other means
+        self.env = env
+        self.robotIndex = {}
+        # Gripper commands persist until changed, like holding a button: a
+        # robosuite gripper moves a little per step toward the commanded side.
+        self.gripperCommands = {}
+        self.armCommands = {}
         super().__init__(scene, timestep=timestep, **kwargs)
 
     def setup(self) -> None:
-        raise NotImplementedError
-        # Reference: MetaDriveSimulation.setup (metadrive/simulator.py), which
-        # builds the env config from the scene before super().setup() creates
-        # the objects; robosuite likewise needs its env config up front.
-        #
-        # def setup(self):
-        #     self.drive_env_config = {}
-        #
-        #     for obj in self.scene.objects:
-        #         if obj.sensors:
-        #             for base_name, sensor in obj.sensors.items():
-        #                 md_name = self._metadrive_sensor_name(obj, base_name)
-        #                 if isinstance(sensor, MetaDriveRGBSensor):
-        #                     self.drive_env_config[md_name] = [
-        #                         RGBCamera,
-        #                         sensor.width,
-        #                         sensor.height,
-        #                     ]
-        #                 elif isinstance(sensor, MetaDriveSSSensor):
-        #                     self.drive_env_config[md_name] = [
-        #                         SemanticCamera,
-        #                         sensor.width,
-        #                         sensor.height,
-        #                     ]
-        #                 else:
-        #                     raise RuntimeError(f"Unknown sensor type: {type(sensor)}")
-        #
-        #     self.using_sensors = bool(self.drive_env_config)
-        #     super().setup()
+        self.env.scene = self.scene
+        self.env.reset()
+        for i, obj in enumerate(_robotsIn(self.scene)):
+            self.robotIndex[obj] = i
+            self.gripperCommands[i] = {}
+        super().setup()
 
     def createObjectInSimulator(self, obj: Object) -> None:
-        raise NotImplementedError
-        # Reference: MetaDriveSimulation.createObjectInSimulator
-        # (metadrive/simulator.py): the first object creates and resets the
-        # gym-style env, later objects are spawned into it.
-        #
-        # def createObjectInSimulator(self, obj):
-        #     converted_position = utils.scenicToMetaDrivePosition(
-        #         obj.position, self.scenic_offset
-        #     )
-        #     converted_heading = utils.scenicToMetaDriveHeading(obj.heading)
-        #
-        #     vehicle_config = {}
-        #     if obj.isVehicle:
-        #         vehicle_config["spawn_position_heading"] = [
-        #             converted_position,
-        #             converted_heading,
-        #         ]
-        #         vehicle_config["spawn_velocity"] = [obj.velocity.x, obj.velocity.y]
-        #
-        #     if not self.defined_ego:
-        #         decision_repeat = math.ceil(self.timestep / 0.02)
-        #         physics_world_step_size = self.timestep / decision_repeat
-        #
-        #         # Initialize the simulator with ego vehicle
-        #         self.client = utils.DriveEnv(
-        #             dict(
-        #                 decision_repeat=decision_repeat,
-        #                 physics_world_step_size=physics_world_step_size,
-        #                 use_render=self.render3D,
-        #                 vehicle_config=vehicle_config,
-        #                 use_mesh_terrain=False,
-        #                 height_scale=0.0001,
-        #                 log_level=logging.CRITICAL,
-        #                 image_observation=self.using_sensors,
-        #                 sensors=self.drive_env_config,
-        #             )
-        #         )
-        #         self.client.config["sumo_map"] = self.sumo_map
-        #         self.client.reset()
-        #
-        #         # Assign the MetaDrive actor to the ego
-        #         metadrive_objects = self.client.engine.get_objects()
-        #         obj.metaDriveActor = list(metadrive_objects.values())[0]
-        #         self.defined_ego = True
-        #
-        #         # Attach sensors (if any)
-        #         self._attach_sensors(obj)
-        #         return
-        #
-        #     # For additional cars
-        #     if obj.isVehicle:
-        #         metaDriveActor = self.client.engine.agent_manager.spawn_object(
-        #             DefaultVehicle,
-        #             vehicle_config=vehicle_config,
-        #         )
-        #         obj.metaDriveActor = metaDriveActor
-        #         self._attach_sensors(obj)
-        #         return
-        #
-        #     # For pedestrians
-        #     if obj.isPedestrian:
-        #         metaDriveActor = self.client.engine.agent_manager.spawn_object(
-        #             Pedestrian,
-        #             position=converted_position,
-        #             heading_theta=converted_heading,
-        #         )
-        #         obj.metaDriveActor = metaDriveActor
-        #         self._attach_sensors(obj)
-        #         direction = [math.cos(converted_heading), math.sin(converted_heading)]
-        #         metaDriveActor.set_velocity(direction, obj.speed)
-        #         return
-        #
-        #     raise SimulationCreationError(
-        #         f"Unsupported object type: {type(obj)} for object {obj}."
-        #     )
+        if obj.isRobot or obj.isTable:
+            return  # built into the env's model by ScenicEnv._load_model
+        if obj not in self.env.boxes:
+            raise SimulationCreationError(
+                f"robosuite cannot add {obj} during a simulation: objects must "
+                "exist when the scene is generated"
+            )
+        joint = self.env.boxes[obj].joints[0]
+        qpos = np.concatenate(
+            [
+                scenicToRobosuitePosition(obj.position),
+                scenicToRobosuiteQuaternion(obj.orientation),
+            ]
+        )
+        self.env.sim.data.set_joint_qpos(joint, qpos)
+        self.env.sim.forward()
 
     def executeActions(self, allActions: dict[Object, tuple[Action, ...]]) -> None:
+        self.armCommands = {i: {} for i in self.gripperCommands}
         super().executeActions(allActions)
-        # Reference: MetaDriveSimulation.executeActions (metadrive/simulator.py):
-        # actions set per-agent control state, gathered here before env.step().
-        #
-        # def executeActions(self, allActions):
-        #     super().executeActions(allActions)
-        #
-        #     for obj in self.agents:
-        #         if obj is self.objects[0]:  # Skip ego vehicle (handled in step)
-        #             continue
-        #         if obj.isVehicle:
-        #             action = obj._prepare_action()
-        #             obj.metaDriveActor.before_step(action)
-        #         else:
-        #             if obj._walking_direction is None:
-        #                 obj._walking_direction = utils.scenicToMetaDriveHeading(obj.heading)
-        #             if obj._walking_speed is None:
-        #                 obj._walking_speed = obj.speed
-        #             direction = [
-        #                 math.cos(obj._walking_direction),
-        #                 math.sin(obj._walking_direction),
-        #             ]
-        #             obj.metaDriveActor.set_velocity(direction, obj._walking_speed)
 
     def step(self) -> None:
-        raise NotImplementedError
-        # Reference: MetaDriveSimulation.step (metadrive/simulator.py): one
-        # gym-style env.step(action) per Scenic step, then optional rendering.
-        #
-        # def step(self):
-        #     start_time = time.monotonic()
-        #
-        #     ego_obj = self.objects[0]
-        #     action = ego_obj._prepare_action()
-        #     self.client.step(action)
-        #
-        #     if self.render and not self.render3D:
-        #         self.client.render(
-        #             mode="topdown",
-        #             semantic_map=True,
-        #             film_size=self.film_size,
-        #             scaling=5,
-        #             screen_record=self.screen_record,
-        #         )
-        #
-        #     if self.real_time:
-        #         end_time = time.monotonic()
-        #         elapsed_time = end_time - start_time
-        #         if elapsed_time < self.timestep:
-        #             time.sleep(self.timestep - elapsed_time)
+        action = np.concatenate(
+            [
+                robot.create_action_vector(
+                    {**self.gripperCommands[i], **self.armCommands[i]}
+                )
+                for i, robot in enumerate(self.env.robots)
+            ]
+        )
+        self.env.step(action)  # also refreshes the viewer when render=True
 
     def getProperties(self, obj: Object, properties: set[str]) -> dict[str, object]:
-        raise NotImplementedError
-        # Reference: IsaacSimSimulation.getProperties (isaac/simulator.py):
-        # full 3D pose for manipulation objects, static objects read from Scenic.
-        #
-        # def getProperties(self, obj, properties):
-        #     if not obj.physics:
-        #         return {prop: getattr(obj, prop) for prop in properties}
-        #
-        #     raw = self.backend.getPhysicsProperties(self.world, obj)
-        #     return dict(
-        #         position=Vector(*raw["position"]),
-        #         velocity=Vector(*raw["velocity"]),
-        #         speed=raw["speed"],
-        #         angularSpeed=raw["angularSpeed"],
-        #         angularVelocity=Vector(*raw["angularVelocity"]),
-        #         yaw=raw["yaw"],
-        #         pitch=raw["pitch"],
-        #         roll=raw["roll"],
-        #     )
+        if obj not in self.env.boxes:
+            # Robot bases and the table are fixed in place.
+            return {prop: getattr(obj, prop) for prop in properties}
 
-    def destroy(self) -> None:
-        super().destroy()
-        # Reference: MetaDriveSimulation.destroy (metadrive/simulator.py),
-        # minus its screen-recording branch: close the env this simulation made.
-        #
-        # def destroy(self):
-        #     if self.client and self.client.engine:
-        #         object_ids = list(self.client.engine._spawned_objects.keys())
-        #         if object_ids:
-        #             self.client.engine.agent_manager.clear_objects(object_ids)
-        #         self.client.close()
-        #
-        #     super().destroy()
+        data = self.env.sim.data
+        body = self.env.boxes[obj].root_body
+        bodyId = self.env.sim.model.body_name2id(body)
+        orientation = robosuiteToScenicOrientation(data.body_xquat[bodyId])
+        yaw, pitch, roll = obj.parentOrientation.localAnglesFor(orientation)
+        velocity = robosuiteToScenicPosition(data.get_body_xvelp(body))
+        angularVelocity = robosuiteToScenicPosition(data.get_body_xvelr(body))
+        return dict(
+            position=robosuiteToScenicPosition(data.body_xpos[bodyId]),
+            velocity=velocity,
+            speed=velocity.norm(),
+            angularVelocity=angularVelocity,
+            angularSpeed=angularVelocity.norm(),
+            yaw=yaw,
+            pitch=pitch,
+            roll=roll,
+        )
