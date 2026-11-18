@@ -36,7 +36,7 @@ def _robotsIn(scene: Scene) -> list[Object]:
     return [obj for obj in scene.objects if obj.isRobot]
 
 
-class ScenicEnv(ManipulationEnv):
+class ScenicRobosuiteEnv(ManipulationEnv):
     """A robosuite env whose model is built from a Scenic scene.
 
     Robots are fixed when the env is created; the table, robot base poses and
@@ -130,7 +130,7 @@ class RobosuiteSimulator(Simulator):
         if self.env is None or key != self.envKey:
             if self.env is not None:
                 self.env.close()
-            self.env = ScenicEnv(
+            self.env = ScenicRobosuiteEnv(
                 scene,
                 # Controller: robosuite's per-robot default, an end-effector
                 # (OSC_POSE, delta) controller, as used by robomimic and
@@ -162,7 +162,7 @@ class RobosuiteSimulation(Simulation):
     """Subclass of `Simulation` for robosuite."""
 
     def __init__(
-        self, scene: Scene, env: ScenicEnv, *, timestep: float, **kwargs
+        self, scene: Scene, env: ScenicRobosuiteEnv, *, timestep: float, **kwargs
     ) -> None:
         self.env = env
         self.robotIndex = {}
@@ -182,7 +182,7 @@ class RobosuiteSimulation(Simulation):
 
     def createObjectInSimulator(self, obj: Object) -> None:
         if obj.isRobot or obj.isTable:
-            return  # built into the env's model by ScenicEnv._load_model
+            return  # built into the env's model by ScenicRobosuiteEnv._load_model
         if obj not in self.env.boxes:
             raise SimulationCreationError(
                 f"robosuite cannot add {obj} during a simulation: objects must "
