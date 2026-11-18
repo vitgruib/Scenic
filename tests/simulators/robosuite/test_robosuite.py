@@ -8,7 +8,6 @@ import pytest
 pytest.importorskip("robosuite")
 
 import scenic
-from scenic.core.simulators import SimulationCreationError
 from scenic.simulators.robosuite.simulator import RobosuiteSimulation
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples")
@@ -91,16 +90,20 @@ def test_lift_example_matches_robosuite_lift():
 
 
 @pytest.mark.parametrize(
-    "facing, direction", [("-90 deg", (1, 0, 0)), ("0 deg", (0, 1, 0))]
+    "position, facing, direction",
+    [("(-0.56, 0, 0)", "-90 deg", (1, 0, 0)), ("(0, -0.56, 0)", "0 deg", (0, 1, 0))],
 )
-def test_end_effector_moves_toward_robot_forward(endEffectorPath, facing, direction):
+def test_end_effector_moves_toward_robot_forward(
+    endEffectorPath, position, facing, direction
+):
     simulate(
         f"""
         model scenic.simulators.robosuite.model
         behavior Forward():
             while True:
                 take MoveEndEffectorAction((1, 0, 0))
-        ego = new Robot at (0, 0, 0), facing {facing}, with behavior Forward
+        new Table
+        ego = new Robot at {position}, facing {facing}, with behavior Forward
         """,
         maxSteps=15,
     )
@@ -116,6 +119,7 @@ def test_close_gripper_closes_fingers():
             do CloseGripper()
             while True:
                 wait
+        new Table
         ego = new Robot at (-0.56, 0, 0), facing -90 deg, with behavior Grip
         """,
         maxSteps=40,
@@ -141,15 +145,3 @@ def test_stock_task_places_its_objects_where_scenic_says():
     assert type(simulation.env).__name__ == "Stack"
     assert tuple(simulation.result.records["a"]) == pytest.approx((0.1, 0, 0.83))
     assert tuple(simulation.result.records["b"]) == pytest.approx((-0.1, 0, 0.83))
-
-
-def test_stock_task_rejects_robot_away_from_its_template_pose():
-    with pytest.raises(SimulationCreationError, match="Stack puts"):
-        simulate(
-            """
-            param env_name = "Stack"
-            model scenic.simulators.robosuite.model
-            new Robot at (0, 0, 0)
-            """,
-            maxSteps=1,
-        )

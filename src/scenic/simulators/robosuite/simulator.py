@@ -11,6 +11,11 @@ The simulator gets its robosuite env one of two ways:
 
 Everything after that (reset, placing objects, stepping, reading state) is
 the same for both.
+
+The interface assumes a valid scene rather than checking it: at least one
+Robot, exactly one unrotated Table (every robosuite task but TwoArmTransport
+has one), and, for a stock task, Robot and Table placed where the task puts
+them and every loose object's robosuiteName naming one of the task's objects.
 """
 
 from __future__ import annotations
@@ -20,11 +25,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import robosuite
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
-from robosuite.models.arenas import EmptyArena, TableArena
+from robosuite.models.arenas import TableArena
 from robosuite.models.objects import BoxObject
 from robosuite.models.tasks import ManipulationTask
 
-from scenic.core.simulators import Simulation, SimulationCreationError, Simulator
+from scenic.core.simulators import Simulation, Simulator
 from scenic.simulators.robosuite.utils import (
     robosuiteToScenicOrientation,
     robosuiteToScenicPosition,
@@ -45,17 +50,9 @@ def _robotsIn(scene: Scene) -> list[Object]:
     return [obj for obj in scene.objects if obj.isRobot]
 
 
-def _tablesIn(scene: Scene) -> list[Object]:
-    return [obj for obj in scene.objects if obj.isTable]
-
-
 def _isLoose(obj: Object) -> bool:
     """Loose objects are the ones Scenic places and tracks (everything but robots and the table)."""
     return not (obj.isRobot or obj.isTable)
-
-
-def _tableTop(table: Object) -> np.ndarray:
-    return scenicToRobosuitePosition(table.position + (0, 0, table.height / 2))
 
 
 class ScenicRobosuiteEnv(ManipulationEnv):
@@ -77,16 +74,14 @@ class ScenicRobosuiteEnv(ManipulationEnv):
             robot.robot_model.set_base_xpos(scenicToRobosuitePosition(obj.position))
             robot.robot_model.set_base_ori([0, 0, scenicToRobosuiteRobotYaw(obj.yaw)])
 
-        tables = _tablesIn(self.scene)  # at most one, checked in createSimulation
-        if not tables:
-            arena = EmptyArena()
-        else:
-            table = tables[0]
-            arena = TableArena(
-                table_full_size=(table.width, table.length, table.height),
-                table_friction=table.friction,
-                table_offset=_tableTop(table),
-            )
+        table = next(obj for obj in self.scene.objects if obj.isTable)
+        arena = TableArena(
+            table_full_size=(table.width, table.length, table.height),
+            table_friction=table.friction,
+            table_offset=scenicToRobosuitePosition(
+                table.position + (0, 0, table.height / 2)  # top of the table
+            ),
+        )
         arena.set_origin([0, 0, 0])
 
         self.boxes = {
@@ -134,15 +129,6 @@ class RobosuiteSimulator(Simulator):
     ) -> RobosuiteSimulation:
         timestep = timestep if timestep else 0.05
         robots = _robotsIn(scene)
-        if not robots:
-            raise SimulationCreationError(
-                "robosuite needs at least one Robot in the scene"
-            )
-        tables = _tablesIn(scene)
-        if len(tables) > 1:
-            raise SimulationCreationError("robosuite supports at most one Table")
-        if any(table.yaw or table.pitch or table.roll for table in tables):
-            raise SimulationCreationError("robosuite tables cannot be rotated")
 
         if self.env is None or not self._envFits(robots, timestep):
             if self.env is not None:
@@ -204,27 +190,24 @@ class RobosuiteSimulation(Simulation):
         super().__init__(scene, timestep=timestep, **kwargs)
 
     def setup(self) -> None:
-        self.isStockTask = not isinstance(self.env, ScenicRobosuiteEnv)
-        if not self.isStockTask:
+        if isinstance(self.env, ScenicRobosuiteEnv):
             self.env.scene = self.scene  # read by ScenicRobosuiteEnv._load_model
         self.env.reset()
         self.mujocoObjects: dict[Object, MujocoObject] = {}
         super().setup()  # calls createObjectInSimulator for each object
 
     def createObjectInSimulator(self, obj: Object) -> None:
-        # Robots and the table are already in the env's model. A stock task
-        # placed them itself, so only check that the scene agrees.
-        if obj.isRobot:
-            if self.isStockTask:
-                self._checkRobotMatchesTask(obj)
-            return
-        if obj.isTable:
-            if self.isStockTask:
-                self._checkTableMatchesTask(obj)
-            return
+        if not _isLoose(obj):
+            return  # robots and the table are already in the env's model
 
-        mujocoObject = self._mujocoObjectFor(obj)
+        if isinstance(self.env, ScenicRobosuiteEnv):
+            mujocoObject = self.env.boxes[obj]
+        else:
+            mujocoObject = next(
+                o for o in self.env.model.mujoco_objects if o.name == obj.robosuiteName
+            )
         self.mujocoObjects[obj] = mujocoObject
+
         qpos = np.concatenate(
             [
                 scenicToRobosuitePosition(obj.position),
@@ -233,42 +216,6 @@ class RobosuiteSimulation(Simulation):
         )
         self.env.sim.data.set_joint_qpos(mujocoObject.joints[0], qpos)
         self.env.sim.forward()
-
-    def _mujocoObjectFor(self, obj: Object) -> MujocoObject:
-        if not self.isStockTask:
-            if obj not in self.env.boxes:
-                raise SimulationCreationError(
-                    f"robosuite cannot add {obj} during a simulation: objects "
-                    "must exist when the scene is generated"
-                )
-            return self.env.boxes[obj]
-
-        taskObjects = {o.name: o for o in self.env.model.mujoco_objects}
-        if obj.robosuiteName not in taskObjects:
-            raise SimulationCreationError(
-                f"{type(self.env).__name__} has no object named "
-                f"{obj.robosuiteName!r} (it has {sorted(taskObjects)})"
-            )
-        return taskObjects[obj.robosuiteName]
-
-    def _checkRobotMatchesTask(self, obj: Object) -> None:
-        model = self.robotFor(obj).robot_model
-        base = self.env.sim.data.get_body_xpos(model.root_body) + model.bottom_offset
-        if not np.allclose(base, scenicToRobosuitePosition(obj.position), atol=1e-3):
-            raise SimulationCreationError(
-                f"{type(self.env).__name__} puts {obj} at {base}, not {obj.position}"
-            )
-
-    def _checkTableMatchesTask(self, table: Object) -> None:
-        arena = self.env.model.mujoco_arena
-        size = (table.width, table.length, table.height)
-        if not (
-            np.allclose(arena.table_offset, _tableTop(table), atol=1e-3)
-            and np.allclose(arena.table_full_size, size, atol=1e-3)
-        ):
-            raise SimulationCreationError(
-                f"{type(self.env).__name__}'s table does not match {table}"
-            )
 
     def robotFor(self, obj: Object) -> RobosuiteRobot:
         """The robosuite robot for a Scenic Robot (they are in the same order)."""

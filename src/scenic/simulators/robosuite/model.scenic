@@ -1,6 +1,6 @@
 """Scenic world model for robosuite.
 
-By default the simulator builds its robosuite env from the scene: at most one
+By default the simulator builds its robosuite env from the scene: exactly one
 `Table`, one or more `Robot` objects, and `Cube` boxes. Defaults match
 robosuite's Lift task; see examples/robosuite/lift.scenic.
 
