@@ -19,27 +19,22 @@ class RobosuiteSimulator(Simulator):
     Args:
         render (bool): Whether to open an on-screen viewer.
         env_name (str): Name of the robosuite environment, e.g. ``"Lift"``.
-        robots (str | list[str]): Robot model(s) for the environment, e.g.
-            ``"Panda"``; two-arm environments need a list of two.
     """
 
     def __init__(
         self,
         render: bool = True,
         env_name: str = "Lift",
-        robots: str | list[str] = "Panda",
     ) -> None:
         super().__init__()
         self.render = render
         self.env_name = env_name
-        self.robots = robots
 
     def createSimulation(self, scene: Scene, **kwargs) -> RobosuiteSimulation:
         return RobosuiteSimulation(
             scene,
             render=self.render,
             env_name=self.env_name,
-            robots=self.robots,
             **kwargs,
         )
 
@@ -57,13 +52,11 @@ class RobosuiteSimulation(Simulation):
         *,
         render: bool,
         env_name: str,
-        robots: str | list[str],
         timestep: float | None,
         **kwargs,
     ) -> None:
         self.render = render
         self.env_name = env_name
-        self.robots = robots
         self.env = None
         timestep = (
             timestep if timestep else 0.05
