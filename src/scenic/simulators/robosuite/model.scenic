@@ -18,7 +18,13 @@ except ModuleNotFoundError:
                            'from this scenario')
 
 param render = True
-simulator RobosuiteSimulator(render=globalParameters.render)
+param env_name = "Lift"
+param robots = "Panda"
+simulator RobosuiteSimulator(
+    render=globalParameters.render,
+    env_name=globalParameters.env_name,
+    robots=globalParameters.robots,
+)
 
 class RobosuiteObject:
     """Abstract class for robosuite objects."""

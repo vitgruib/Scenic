@@ -18,46 +18,56 @@ class RobosuiteSimulator(Simulator):
 
     Args:
         render (bool): Whether to open an on-screen viewer.
+        env_name (str): Name of the robosuite environment, e.g. ``"Lift"``.
+        robots (str | list[str]): Robot model(s) for the environment, e.g.
+            ``"Panda"``; two-arm environments need a list of two.
     """
 
-    def __init__(self, render: bool = True) -> None:
+    def __init__(
+        self,
+        render: bool = True,
+        env_name: str = "Lift",
+        robots: str | list[str] = "Panda",
+    ) -> None:
         super().__init__()
         self.render = render
+        self.env_name = env_name
+        self.robots = robots
 
     def createSimulation(self, scene: Scene, **kwargs) -> RobosuiteSimulation:
-        return RobosuiteSimulation(scene, render=self.render, **kwargs)
-        # Reference: IsaacSimSimulator.createSimulation (isaac/simulator.py):
-        #
-        # def createSimulation(self, scene, **kwargs):
-        #     return IsaacSimSimulation(
-        #         scene,
-        #         self.client,
-        #         self.environmentUSDPath,
-        #         self.backend,
-        #         headless=self.headless,
-        #         **kwargs,
-        #     )
+        return RobosuiteSimulation(
+            scene,
+            render=self.render,
+            env_name=self.env_name,
+            robots=self.robots,
+            **kwargs,
+        )
 
     def destroy(self) -> None:
         super().destroy()
-        # Reference: IsaacSimSimulator.destroy (isaac/simulator.py). robosuite
-        # has no long-lived app; its env is closed per simulation instead.
-        #
-        # def destroy(self):
-        #     super().destroy()
-        #     self.backend.closeSimulationApp(self.client)
+        # TODO test to make sure everyting is destoreyd properly
 
 
 class RobosuiteSimulation(Simulation):
     """Subclass of `Simulation` for robosuite."""
 
     def __init__(
-        self, scene: Scene, *, render: bool, timestep: float | None, **kwargs
+        self,
+        scene: Scene,
+        *,
+        render: bool,
+        env_name: str,
+        robots: str | list[str],
+        timestep: float | None,
+        **kwargs,
     ) -> None:
         self.render = render
+        self.env_name = env_name
+        self.robots = robots
         self.env = None
-        if timestep is None:
-            timestep = 0.05
+        timestep = (
+            timestep if timestep else 0.05
+        )  # lookout for contradicitnos that might be somehow passed through other means
         super().__init__(scene, timestep=timestep, **kwargs)
         # Reference: IsaacSimSimulation.__init__ (isaac/simulator.py):
         #
