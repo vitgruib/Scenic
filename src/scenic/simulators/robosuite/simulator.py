@@ -62,24 +62,6 @@ class RobosuiteSimulation(Simulation):
             timestep if timestep else 0.05
         )  # lookout for contradicitnos that might be somehow passed through other means
         super().__init__(scene, timestep=timestep, **kwargs)
-        # Reference: IsaacSimSimulation.__init__ (isaac/simulator.py):
-        #
-        # def __init__(self, scene, client, environmentUSDPath, backend, *,
-        #              headless=False, timestep, **kwargs):
-        #     self.backend = backend
-        #     self.client = client
-        #     self.headless = headless
-        #     self.world = None
-        #     self.tmpMeshDir = tempfile.mkdtemp()
-        #
-        #     self.backend.enableExtension("omni.kit.asset_converter")
-        #     if environmentUSDPath:
-        #         self.loadEnvironmentStage(environmentUSDPath)
-        #
-        #     timestep = 1.0 / 60.0 if timestep is None else timestep
-        #     self.world = self.backend.createWorld(timestep)
-        #
-        #     super().__init__(scene, timestep=timestep, **kwargs)
 
     def setup(self) -> None:
         raise NotImplementedError
