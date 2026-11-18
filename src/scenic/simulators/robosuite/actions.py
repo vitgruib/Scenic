@@ -39,9 +39,9 @@ class MoveEndEffectorAction(RobotAction):
         self.delta = np.array([*translation, *rotation], dtype=float)
 
     def applyTo(self, agent: Object, simulation: RobosuiteSimulation) -> None:
-        i = simulation.robotIndex[agent]
-        arm = simulation.env.robots[i].arms[0]
-        simulation.armCommands[i][arm] = self.delta
+        robot = simulation.robotFor(agent)
+        arm = robot.arms[0]
+        simulation.armCommands.setdefault(robot, {})[arm] = self.delta
 
 
 class SetGripperAction(RobotAction):
@@ -51,8 +51,7 @@ class SetGripperAction(RobotAction):
         self.closed = closed
 
     def applyTo(self, agent: Object, simulation: RobosuiteSimulation) -> None:
-        i = simulation.robotIndex[agent]
-        robot = simulation.env.robots[i]
+        robot = simulation.robotFor(agent)
         arm = robot.arms[0]
         command = np.full(robot.gripper[arm].dof, 1.0 if self.closed else -1.0)
-        simulation.gripperCommands[i][f"{arm}_gripper"] = command
+        simulation.gripperCommands.setdefault(robot, {})[f"{arm}_gripper"] = command

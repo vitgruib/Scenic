@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("robosuite")
 
 import scenic
+from scenic.core.simulators import SimulationCreationError
 from scenic.simulators.robosuite.simulator import RobosuiteSimulation
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples")
@@ -121,3 +122,34 @@ def test_close_gripper_closes_fingers():
     )
     robot = simulation.env.robots[0]
     assert robot.gripper["right"].current_action == pytest.approx([-1, 1])
+
+
+def test_stock_task_places_its_objects_where_scenic_says():
+    simulation = simulate(
+        """
+        param env_name = "Stack"
+        model scenic.simulators.robosuite.model
+        new Table
+        new Robot at (-0.56, 0, 0), facing -90 deg
+        cubeA = new Cube with robosuiteName "cubeA", at (0.1, 0, 0.83)
+        cubeB = new Cube with robosuiteName "cubeB", at (-0.1, 0, 0.83)
+        record initial cubeA.position as a
+        record initial cubeB.position as b
+        """,
+        maxSteps=1,
+    )
+    assert type(simulation.env).__name__ == "Stack"
+    assert tuple(simulation.result.records["a"]) == pytest.approx((0.1, 0, 0.83))
+    assert tuple(simulation.result.records["b"]) == pytest.approx((-0.1, 0, 0.83))
+
+
+def test_stock_task_rejects_robot_away_from_its_template_pose():
+    with pytest.raises(SimulationCreationError, match="Stack puts"):
+        simulate(
+            """
+            param env_name = "Stack"
+            model scenic.simulators.robosuite.model
+            new Robot at (0, 0, 0)
+            """,
+            maxSteps=1,
+        )
